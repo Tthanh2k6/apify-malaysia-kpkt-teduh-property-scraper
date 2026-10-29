@@ -1,0 +1,13 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "Malaysia KPKT TEDUH Developers & Projects Output",
+  "description": "Structured records of licensed Malaysian property developers and housing projects from KPKT TEDUH.",
+  "type": "object",
+  "properties": {
+    "dataset": {
+      "type": "string",
+      "title": "KPKT TEDUH Property Developers Dataset",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    }
+  }
+}

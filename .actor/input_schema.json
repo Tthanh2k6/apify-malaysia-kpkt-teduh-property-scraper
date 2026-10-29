@@ -1,0 +1,23 @@
+{
+  "title": "Malaysia KPKT TEDUH Property Developer Scraper Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "maxPages": {
+      "title": "Max API Pages to Fetch (30 Developers per Page)",
+      "type": "integer",
+      "description": "Number of pages to fetch from KPKT TEDUH /api/developer-swasta endpoint (1 page = 30 developers & all their licensed housing projects; 219 pages = full ~6,545 developers).",
+      "default": 1,
+      "prefill": 1,
+      "minimum": 1,
+      "maximum": 250
+    },
+    "searchKeyword": {
+      "title": "Optional Developer / Project Filter Keyword",
+      "type": "string",
+      "description": "Optional keyword to filter developer name or state (leave empty for all).",
+      "default": ""
+    }
+  },
+  "required": ["maxPages"]
+}

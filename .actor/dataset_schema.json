@@ -1,0 +1,34 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "KPKT TEDUH Property Developers & Projects",
+      "transformation": {
+        "fields": [
+          "developer_code",
+          "developer_name",
+          "phone",
+          "email",
+          "project_code",
+          "project_name",
+          "state",
+          "apdl_validity"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "developer_code": { "label": "Developer Code", "format": "text" },
+          "developer_name": { "label": "Developer Name", "format": "text" },
+          "phone": { "label": "Office Phone", "format": "text" },
+          "email": { "label": "Email", "format": "text" },
+          "project_code": { "label": "Project Code", "format": "text" },
+          "project_name": { "label": "Housing Project Name", "format": "text" },
+          "state": { "label": "State (Negeri)", "format": "text" },
+          "apdl_validity": { "label": "APDL Permit Validity", "format": "text" }
+        }
+      }
+    }
+  }
+}
