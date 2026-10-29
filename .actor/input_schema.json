@@ -16,6 +16,7 @@
       "title": "Optional Developer / Project Filter Keyword",
       "type": "string",
       "description": "Optional keyword to filter developer name or state (leave empty for all).",
+      "editor": "textfield",
       "default": ""
     }
   },
