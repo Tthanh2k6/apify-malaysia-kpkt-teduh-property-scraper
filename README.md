@@ -1,5 +1,7 @@
 # Malaysia KPKT TEDUH Property Developers & Housing Projects Scraper (`teduh.kpkt.gov.my`)
 
+**Try it on Apify Store:** https://apify.com/thanh81646/malaysia-kpkt-teduh-property-developer-scraper
+
 Extracts licensed private property developers (**Pemaju Perumahan Swasta**) and their registered housing projects (**Senarai Projek Berlesen**) directly from Malaysia's Ministry of Housing and Local Government (**KPKT TEDUH**) public JSON endpoint.
 
 ## Extracted fields
