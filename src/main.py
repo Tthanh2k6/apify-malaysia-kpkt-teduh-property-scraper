@@ -1,7 +1,8 @@
 """
 Apify Store Actor: Malaysia KPKT TEDUH Property Developers & Housing Projects Scraper
-Queries the official KPKT TEDUH JSON API (/api/developer-swasta) with deterministic
-fallback records so Apify Daily Auto-Tests always succeed even if Malaysian Gov servers throttle.
+Queries the official KPKT TEDUH JSON API (/api/developer-swasta). If the API returns nothing
+(unreachable, error, empty result), the actor returns 2 built-in sample rows instead of an empty
+dataset; those rows carry "is_sample_fallback": true and the run status message says so.
 
 The API has used two naming styles for its fields: snake_case (kod_pemaju, nama_pemaju,
 no_telefon, projects, ...) and, as checked on 2026-11-02, camelCase (kodPemaju, namaPemaju,
@@ -74,7 +75,7 @@ FALLBACK_VERIFIED_RECORDS = [
         "registered_address": "NO. 36A, JALAN BRP 6/11, BUKIT RAHMAN PUTRA, 47000 SUNGAI BULOH, SELANGOR",
         "phone": "03-61568621",
         "email": "ammodernhomes@gmail.com",
-        "website": "https://teduh.kpkt.gov.my/developer-swasta/13366",
+        "website": "",
         "project_code": "13366-1",
         "project_name": "TAMAN DESA BUKIT PERMATA",
         "state": "Selangor",
@@ -86,7 +87,7 @@ FALLBACK_VERIFIED_RECORDS = [
         "registered_address": "WISMA A.K. HARTA, KOTA BHARU, KELANTAN",
         "phone": "09-7482888",
         "email": "info@akharta.com.my",
-        "website": "https://teduh.kpkt.gov.my/developer-swasta/9627",
+        "website": "",
         "project_code": "9627-5",
         "project_name": "TAMAN SRI KOTA",
         "state": "Kelantan",
@@ -232,7 +233,10 @@ async def fetch_kpkt_teduh_pages(
             if page <= max_pages:
                 await asyncio.sleep(PAGE_DELAY_SECS)
 
-    return records if records else FALLBACK_VERIFIED_RECORDS
+    if records:
+        return records
+    log("KPKT API returned no records; returning the 2 built-in sample rows (is_sample_fallback=true).")
+    return [{**row, "is_sample_fallback": True} for row in FALLBACK_VERIFIED_RECORDS]
 
 
 async def main() -> None:
@@ -266,7 +270,11 @@ async def main() -> None:
                 results = results[:max_items]
 
             await Actor.push_data(results)
-            if was_capped:
+            if results and results[0].get("is_sample_fallback"):
+                await Actor.set_status_message(
+                    "KPKT API unreachable or returned nothing: dataset holds 2 built-in SAMPLE rows, not live data."
+                )
+            elif was_capped:
                 await Actor.set_status_message(FREE_TIER_CAP_MSG)
             else:
                 await Actor.set_status_message(f"Extracted {len(results)} KPKT TEDUH developer-project records.")
