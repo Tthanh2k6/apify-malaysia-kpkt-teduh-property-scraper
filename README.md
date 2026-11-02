@@ -4,19 +4,25 @@ Extracts licensed private property developers (**Pemaju Perumahan Swasta**) and 
 
 ## Extracted fields
 
-One row per developer-project pair (a developer with no projects gives one row with empty project fields):
+One row per developer-project pair (a developer with no projects gives one row with empty project fields). Source field names as returned by the API on 2 Nov 2026 are in brackets:
 
-- `developer_code` (`kod_pemaju`) and `developer_name` (`nama_pemaju`)
-- `registered_address`, `phone` (`no_telefon`), `email` (`emel`), `website` (`laman_web`)
-- `project_code`, `project_name` (`nama_projek`), `state` (`negeri`) and `apdl_validity` (`tarikh_mula_apdl` - `tarikh_tamat_apdl`)
+- `developer_code` (`kodPemaju`) and `developer_name` (`namaPemaju`)
+- `registered_address` (`alamatDaftar`), `phone` (`telefon`), `email` (`emel`), `website` (`lamanWebUrl`, else `lamanWeb`)
+- `project_name` (`projek[].nama`) and `state` (`projek[].negeri`)
+- `project_code`: `<developer_code>-<n>`. The API currently sends no project ID, so `n` is the project's position (1, 2, 3...) in that developer's list; it is not an official KPKT code and can shift if the list changes.
+- `apdl_validity`: the developer licence period (`lesenMula` - `lesenTamat`), the same for every project of a developer. If the API sends per-project APDL dates (older versions did), those are used instead.
 
-Input: `maxPages` (default 1), `maxItems` (default 25) and an optional `searchKeyword`. Runs on the Apify free tier are limited to 1 page and 25 rows. Coverage of a full run has not been measured, so the README makes no claim about the total number of developers or projects.
+The API writes `-` when a developer has no phone, email or website; the actor outputs an empty string instead. Many developers have no phone or email in the registry, so empty `phone`/`email` values are normal. `website` is also empty when the developer lists none (versions before 2 Nov 2026 filled in a `teduh.kpkt.gov.my/developer-swasta/<code>` link, which is not a page on the portal).
+
+Earlier versions of the API used snake_case names (`kod_pemaju`, `nama_pemaju`, `no_telefon`, `laman_web`, `projects`, `nama_projek`, `tarikh_mula_apdl` / `tarikh_tamat_apdl`). The actor reads both styles, so output field names stay the same either way.
+
+Input: `maxPages` (default 1), `maxItems` (default 25) and an optional `searchKeyword` (developer name; digits only searches by developer code). The actor asks the API for 30 developers per page and stops at the last page the API reports. Runs on the Apify free tier are limited to 1 page and 25 rows. The API reports its own totals: on 2 Nov 2026 that was 6,548 developers and 27,280 projects (219 pages of 30). A full run through every page has not been tested.
 
 ## Important: built-in sample rows when the API fails
 
 The actor currently returns **2 hard-coded sample rows** (named `FALLBACK_VERIFIED_RECORDS` in `src/main.py`) instead of an error whenever it ends up with zero records. That happens if the first request to `https://teduh.kpkt.gov.my/api/developer-swasta` returns a non-200 status, times out, returns invalid JSON, or returns an empty list (including a `searchKeyword` that matches nothing). If later pages fail after some rows were fetched, the rows fetched so far are returned and no sample rows are added.
 
-The sample rows are not live data: one has an APDL validity of `10/08/2020 - 09/08/2021`, the other `Active Licensed Record`. Nothing in the output marks them as samples, and the run still reports success. To spot them, check whether your dataset contains exactly the developer codes `13366` and `9627` with project codes `13366-1` and `9627-5`. Treat such a result as "the API was unreachable", not as real results.
+The sample rows are not live data: one has an APDL validity of `10/08/2020 - 09/08/2021`, the other `Active Licensed Record`. Nothing in the output marks them as samples, and the run still reports success. To spot them, check whether your dataset is exactly these two rows: `13366` / `A & M MODERN HOMES SDN. BHD.` / `13366-1` and `9627` / `A.K. HARTA SDN. BHD.` / `9627-5`. Check the names too, not just the codes: in the live API, code `13366` belongs to a different developer (`128 ARA DAMANSARA SDN. BHD.`) whose single project also gets `13366-1`. Treat such a result as "the API was unreachable", not as real results. Failed requests are logged as warnings in the run log.
 
 The HTTP client also runs with TLS certificate verification turned off (`verify=False`).
 

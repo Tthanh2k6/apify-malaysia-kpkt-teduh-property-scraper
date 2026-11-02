@@ -2,11 +2,16 @@
 Apify Store Actor: Malaysia KPKT TEDUH Property Developers & Housing Projects Scraper
 Queries the official KPKT TEDUH JSON API (/api/developer-swasta) with deterministic
 fallback records so Apify Daily Auto-Tests always succeed even if Malaysian Gov servers throttle.
+
+The API has used two naming styles for its fields: snake_case (kod_pemaju, nama_pemaju,
+no_telefon, projects, ...) and, as checked on 2026-11-02, camelCase (kodPemaju, namaPemaju,
+telefon, projek, ...). Every field is looked up under both, so a switch back does not blank
+the output. Output field names are unchanged.
 """
 import asyncio
 import json
 import os
-from typing import Dict, List, Any
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -25,10 +30,42 @@ def is_free_tier_at_home() -> bool:
 try:
     from apify import Actor
     HAS_APIFY = True
-except ImportError:
+    APIFY_IMPORT_ERROR: Optional[BaseException] = None
+except ImportError as _import_error:
     HAS_APIFY = False
+    APIFY_IMPORT_ERROR = _import_error
 
 KPKT_API_URL = "https://teduh.kpkt.gov.my/api/developer-swasta"
+# The portal's own "Senarai Projek Berlesen" page asks for 30 developers per page; without
+# per_page the API answers with 25. Pagination never relies on this number: it follows the
+# rows actually returned and the last page reported in the response.
+REQUESTED_PER_PAGE = 30
+PAGE_DELAY_SECS = 0.5
+USER_AGENT = (
+    "Mozilla/5.0 (compatible; KPKT-TEDUH-Apify-Actor/1.1; "
+    "+https://github.com/Tthanh2k6/apify-malaysia-kpkt-teduh-property-scraper)"
+)
+
+# The API writes "-" where a developer has no phone, email or website.
+EMPTY_PLACEHOLDERS = {"", "-", "--", "n/a", "null", "none"}
+
+# Source keys per output field: current camelCase name first, older snake_case names after.
+DEV_CODE_KEYS = ("kodPemaju", "kod_pemaju")
+DEV_NAME_KEYS = ("namaPemaju", "nama_pemaju")
+DEV_ADDRESS_KEYS = ("alamatDaftar", "alamat_daftar")
+DEV_ADDRESS_PART_KEYS = ("alamat1", "alamat2", "poskod", "bandar")
+DEV_PHONE_KEYS = ("telefon", "noTelefon", "no_telefon")
+DEV_EMAIL_KEYS = ("emel", "email")
+DEV_WEBSITE_KEYS = ("lamanWebUrl", "lamanWeb", "laman_web_url", "laman_web")
+DEV_LICENCE_START_KEYS = ("lesenMula", "lesen_mula")
+DEV_LICENCE_END_KEYS = ("lesenTamat", "lesen_tamat")
+DEV_PROJECTS_KEYS = ("projek", "projects")
+PRJ_ID_KEYS = ("idProjek", "id_projek", "kodProjek", "kod_projek")
+PRJ_NAME_KEYS = ("nama", "namaProjek", "nama_projek")
+PRJ_STATE_KEYS = ("negeri",)
+PRJ_APDL_START_KEYS = ("tarikhMulaApdl", "tarikh_mula_apdl")
+PRJ_APDL_END_KEYS = ("tarikhTamatApdl", "tarikh_tamat_apdl")
+LAST_PAGE_KEYS = ("last_page", "lastPage", "total_pages", "totalPages")
 
 FALLBACK_VERIFIED_RECORDS = [
     {
@@ -58,70 +95,150 @@ FALLBACK_VERIFIED_RECORDS = [
 ]
 
 
-async def fetch_kpkt_teduh_pages(max_pages: int = 1, keyword: str = "") -> List[Dict[str, Any]]:
+def _pick(obj: Dict[str, Any], keys: tuple) -> str:
+    """First non-empty value among `keys`; the API's "-" placeholder counts as empty."""
+    for key in keys:
+        value = obj.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text.lower() not in EMPTY_PLACEHOLDERS:
+            return text
+    return ""
+
+
+def _pick_list(obj: Dict[str, Any], keys: tuple) -> List[Dict[str, Any]]:
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, list) and value:
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _date_range(start: str, end: str) -> str:
+    if start and end:
+        return f"{start} - {end}"
+    return start or end
+
+
+def _extract_developers(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if isinstance(data, dict):  # Laravel paginator nested inside a resource wrapper
+        data = data.get("data")
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _extract_last_page(payload: Any) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    sources = [payload.get("meta"), payload.get("data"), payload]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in LAST_PAGE_KEYS:
+            try:
+                if source.get(key) is not None:
+                    return int(source[key])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def developer_to_records(dev: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One output row per project; a developer without projects gives one row with empty project fields."""
+    kod = _pick(dev, DEV_CODE_KEYS)
+    address = _pick(dev, DEV_ADDRESS_KEYS) or ", ".join(
+        part for part in (_pick(dev, (key,)) for key in DEV_ADDRESS_PART_KEYS) if part
+    )
+    base = {
+        "developer_code": kod,
+        "developer_name": _pick(dev, DEV_NAME_KEYS),
+        "registered_address": address,
+        "phone": _pick(dev, DEV_PHONE_KEYS),
+        "email": _pick(dev, DEV_EMAIL_KEYS),
+        "website": _pick(dev, DEV_WEBSITE_KEYS),
+    }
+    licence_validity = _date_range(_pick(dev, DEV_LICENCE_START_KEYS), _pick(dev, DEV_LICENCE_END_KEYS))
+
+    projects = _pick_list(dev, DEV_PROJECTS_KEYS)
+    if not projects:
+        return [{**base, "project_code": "", "project_name": "", "state": "", "apdl_validity": ""}]
+
+    rows = []
+    for position, prj in enumerate(projects, start=1):
+        project_id = _pick(prj, PRJ_ID_KEYS) or str(position)
+        apdl = _date_range(_pick(prj, PRJ_APDL_START_KEYS), _pick(prj, PRJ_APDL_END_KEYS))
+        rows.append({
+            **base,
+            "project_code": f"{kod}-{project_id}",
+            "project_name": _pick(prj, PRJ_NAME_KEYS),
+            "state": _pick(prj, PRJ_STATE_KEYS),
+            "apdl_validity": apdl or licence_validity,
+        })
+    return rows
+
+
+async def fetch_kpkt_teduh_pages(
+    max_pages: int = 1,
+    keyword: str = "",
+    max_items: Optional[int] = None,
+    log: Optional[Callable[[str], None]] = None,
+) -> List[Dict[str, Any]]:
+    log = log or print
     records: List[Dict[str, Any]] = []
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": USER_AGENT,
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://teduh.kpkt.gov.my/senarai-projek-berlesen",
     }
-    async with httpx.AsyncClient(headers=headers, timeout=10.0, verify=False, follow_redirects=True) as client:
-        for page in range(1, max_pages + 1):
+    async with httpx.AsyncClient(headers=headers, timeout=20.0, verify=False, follow_redirects=True) as client:
+        page = 1
+        while page <= max_pages:
+            params: Dict[str, Any] = {"page": page, "per_page": REQUESTED_PER_PAGE}
+            if keyword:
+                # Current API: q + type (nama = developer name, kod = developer code).
+                # "search" is kept for the older API version and is ignored by the current one.
+                params["q"] = keyword
+                params["type"] = "kod" if keyword.isdigit() else "nama"
+                params["search"] = keyword
             try:
-                params = {"page": page}
-                if keyword:
-                    params["search"] = keyword
                 resp = await client.get(KPKT_API_URL, params=params)
                 if resp.status_code != 200:
+                    log(f"KPKT API page {page} returned HTTP {resp.status_code}; stopping.")
                     break
                 payload = resp.json()
-                dev_list = payload.get("data") or []
-                for dev in dev_list:
-                    kod = str(dev.get("kod_pemaju") or "")
-                    nama = str(dev.get("nama_pemaju") or "").strip()
-                    addr = ", ".join(
-                        str(dev.get(k) or "").strip()
-                        for k in ("alamat1", "alamat2", "poskod", "bandar")
-                        if dev.get(k)
-                    )
-                    phone = str(dev.get("no_telefon") or "").strip()
-                    email = str(dev.get("emel") or "").strip()
-                    web = str(dev.get("laman_web") or f"https://teduh.kpkt.gov.my/developer-swasta/{kod}").strip()
-                    projects = dev.get("projects") or []
-                    if not projects:
-                        records.append({
-                            "developer_code": kod,
-                            "developer_name": nama,
-                            "registered_address": addr,
-                            "phone": phone,
-                            "email": email,
-                            "website": web,
-                            "project_code": "",
-                            "project_name": "",
-                            "state": "",
-                            "apdl_validity": "",
-                        })
-                    else:
-                        for prj in projects:
-                            records.append({
-                                "developer_code": kod,
-                                "developer_name": nama,
-                                "registered_address": addr,
-                                "phone": phone,
-                                "email": email,
-                                "website": web,
-                                "project_code": f"{kod}-{prj.get('id_projek', '')}",
-                                "project_name": str(prj.get("nama_projek") or "").strip(),
-                                "state": str(prj.get("negeri") or "").strip(),
-                                "apdl_validity": f"{prj.get('tarikh_mula_apdl', '')} - {prj.get('tarikh_tamat_apdl', '')}".strip(" -"),
-                            })
-            except Exception:
+            except Exception as exc:
+                log(f"KPKT API page {page} failed ({exc!r}); stopping.")
                 break
+
+            developers = _extract_developers(payload)
+            if not developers:
+                break
+            for dev in developers:
+                records.extend(developer_to_records(dev))
+
+            last_page = _extract_last_page(payload)
+            if last_page is not None and page >= last_page:
+                break
+            if max_items is not None and len(records) >= max_items:
+                break
+            page += 1
+            if page <= max_pages:
+                await asyncio.sleep(PAGE_DELAY_SECS)
 
     return records if records else FALLBACK_VERIFIED_RECORDS
 
 
 async def main() -> None:
+    if not HAS_APIFY and os.getenv("APIFY_IS_AT_HOME"):
+        # On the platform a broken SDK install must fail the run, not "succeed" with an empty dataset.
+        raise RuntimeError(f"Apify SDK could not be imported: {APIFY_IMPORT_ERROR!r}")
     if HAS_APIFY:
         async with Actor:
             actor_input = await Actor.get_input() or {}
@@ -140,7 +257,9 @@ async def main() -> None:
             Actor.log.info(
                 f"Fetching Malaysia KPKT TEDUH developers (maxPages={max_pages}, maxItems={max_items}, keyword='{keyword}')..."
             )
-            results = await fetch_kpkt_teduh_pages(max_pages=max_pages, keyword=keyword)
+            results = await fetch_kpkt_teduh_pages(
+                max_pages=max_pages, keyword=keyword, max_items=max_items, log=Actor.log.warning
+            )
             if is_free_tier_at_home() and len(results) > FREE_TIER_MAX_ITEMS and max_items >= FREE_TIER_MAX_ITEMS:
                 results = results[:FREE_TIER_MAX_ITEMS]
             else:
@@ -156,4 +275,3 @@ async def main() -> None:
         results = await fetch_kpkt_teduh_pages(max_pages=1)
         print(f"Fetched {len(results)} records from KPKT TEDUH.")
         print(json.dumps(results[:3], indent=2))
-
