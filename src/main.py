@@ -239,6 +239,21 @@ async def fetch_kpkt_teduh_pages(
     return [{**row, "is_sample_fallback": True} for row in FALLBACK_VERIFIED_RECORDS]
 
 
+def _coerce_positive_int(value: Any, default: int) -> int:
+    """Parse integer input values safely, falling back to `default` on empty, invalid, or non-positive values."""
+    if value is None or isinstance(value, bool):
+        return default
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
+
+
 async def main() -> None:
     if not HAS_APIFY and os.getenv("APIFY_IS_AT_HOME"):
         # On the platform a broken SDK install must fail the run, not "succeed" with an empty dataset.
@@ -246,9 +261,10 @@ async def main() -> None:
     if HAS_APIFY:
         async with Actor:
             actor_input = await Actor.get_input() or {}
-            max_pages = int(actor_input.get("maxPages", 1))
-            max_items = int(actor_input.get("maxItems", 25))
-            keyword = str(actor_input.get("searchKeyword", "")).strip()
+            max_pages = _coerce_positive_int(actor_input.get("maxPages"), 1)
+            max_items = _coerce_positive_int(actor_input.get("maxItems"), 25)
+            raw_kw = actor_input.get("searchKeyword")
+            keyword = "" if raw_kw is None else str(raw_kw).strip()
 
             was_capped = False
             if is_free_tier_at_home() and (max_items > FREE_TIER_MAX_ITEMS or max_pages > 1):
